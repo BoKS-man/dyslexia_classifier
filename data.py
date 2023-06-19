@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as st
 from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
 
 def crop_img(img:np.ndarray|list[int], crop_size_h_w:list[int]=[224], step_x_y:list[int]=[40]):
     crops = []
@@ -34,12 +35,20 @@ def crop_img(img:np.ndarray|list[int], crop_size_h_w:list[int]=[224], step_x_y:l
 
     return crops, crop_coords, px_means
 
-def get_datasets(dys_path:str, not_dys_path:str, \
+def get_datasets(dys_path:str, not_dys_path:str, batch_size:int=1, \
                  crop_size_h_w:list[int]=[224], crop_step_x_y:list[int]=[40], \
                  val:bool=False, test_val_part:list[float]=[.15]):
     for data_path in [dys_path, not_dys_path]:
         if not os.path.exists(data_path):
             raise ValueError(f'path {data_path} not exists')
+    if not val and len(test_val_part) > 1:
+        test_val_part = test_val_part[0]
+    if test_val_part == 0: 
+        raise ValueError('test_val_part must be specified')
+    if val and len(test_val_part) == 1:
+        test_val_part = 2*test_val_part
+    if val and len(test_val_part) > 2:
+        test_val_part = test_val_part[:2]
     y = []
     crops = []
     sources = []
@@ -55,15 +64,29 @@ def get_datasets(dys_path:str, not_dys_path:str, \
             crop_coords += list(img_crop_coords)
             sources += len(img_crops)*[file]
             crop_px_means += list(img_crop_px_means)
-    #print(crop_coords[:5])
-    #print(crop_px_means[:5])
-    #print(sources[:5])
-    #print(y[:5])
-    data = np.concatenate((np.asarray(crop_coords),
-                           np.expand_dims(crop_px_means, axis=1),
-                           np.expand_dims(sources, axis=1), 
-                           np.expand_dims(y, axis=1)), axis=1)
-    #print(data.shape)
-    data = pd.DataFrame(data, columns=['coord_x', 'coord_y', 'px_mean', 'source', 'y'])
-    return data
+    crops = np.asarray(crops)
+    data = list(zip(crop_coords, crop_px_means, sources, y))
+    data = pd.DataFrame(data, columns=['coords', 'px_mean', 'source', 'y'])
+    data.reset_index(inplace=True)
+    data['int_mean'] = 0
+    px_mean_borders = [0] + [np.percentile(data['px_mean'], p*10) for p in list(range(1, 10))] + [data['px_mean'].max()]
+    for i in range(10):
+        data.loc[list(data[(data['px_mean']>px_mean_borders[i]) & (data['px_mean']<=px_mean_borders[i+1])].index), 'int_mean'] = i
+    train, test = train_test_split(data, test_size=sum(test_val_part), stratify=data[['y', 'int_mean']])
+    if val:
+        test, val = train_test_split(test, test_size=np.divide(*test_val_part)/2, stratify=test[['y', 'int_mean']])
+    #return train, test
+    return [None if type(ds) != pd.DataFrame else \
+            DataLoader(DysDataset(ds, crops[list(ds['index'].values)]), batch_size, True, num_workers=1) \
+                for ds in [train, test, val]]
 
+class DysDataset(Dataset):
+    def __init__(self, data, imgs):
+        self.__imgs = imgs
+        self.__y = data['y'].values
+
+    def __getitem__(self, i):
+        return self.__imgs[i], self.__y[i]
+    
+    def __len__(self):
+        return len(self.__y)
