@@ -1,4 +1,5 @@
 import os
+import torch
 import cv2 as cv
 import numpy as np
 import pandas as pd
@@ -82,8 +83,9 @@ def get_datasets(dys_path:str, not_dys_path:str, batch_size:int=1, \
 
 class DysDataset(Dataset):
     def __init__(self, data, imgs):
-        self.__imgs = imgs
-        self.__y = data['y'].values
+        self.__imgs = torch.tensor(imgs, dtype=torch.float32)
+        self.__imgs = torch.permute(self.__imgs, [0, 3, 1, 2])
+        self.__y = torch.tensor(np.expand_dims(data['y'].values, axis=1), dtype=torch.float32)
 
     def __getitem__(self, i):
         return self.__imgs[i], self.__y[i]
